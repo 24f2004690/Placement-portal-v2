@@ -91,7 +91,7 @@ class Application(db.Model):
     application_date = db.Column(db.DateTime, default=datetime.utcnow)
     status = db.Column(db.String(20), default='Applied') # 'Applied', 'Shortlisted', 'Selected', 'Rejected'
     remarks = db.Column(db.Text, nullable=True) # Interviewer feedback
-    interview_date = db.Column(db.DateTime, default=datetime.utcnow, nullable=True)
+    interview_date = db.Column(db.DateTime, nullable=True)
 
     student = db.relationship('Student', back_populates='applications')
     drive = db.relationship('PlacementDrive', back_populates='applications')

@@ -1,0 +1,81 @@
+# =========================
+# Frontend & Existing Rules
+# =========================
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.DS_Store
+dist
+dist-ssr
+coverage
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.tsbuildinfo
+
+.eslintcache
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Vitest
+__screenshots__/
+
+# Vite
+*.timestamp-*-*.mjs
+
+# =========================
+# Environment Variables
+# =========================
+# NEVER commit your secrets, passwords, or API keys!
+.env
+.env.*
+!.env.example
+
+# =========================
+# Backend (Python / Flask / Celery)
+# =========================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments (Windows & WSL)
+venv/
+venv_wsl/
+env/
+.env/
+
+# Database (Ignore local test data)
+*.db
+*.sqlite3
+instance/
+
+# Celery Beat Schedule Files
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat-schedule.bak
+celerybeat-schedule.dir
+celerybeat.pid
+
+# Uploads / Generated CSV Files
+backend/uploads/*.csv
+backend/uploads/
+!backend/uploads/.keep

@@ -25,10 +25,12 @@ app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 # Cache Config
-app.config['CACHE_TYPE'] = 'RedisCache'
-app.config['CACHE_REDIS_HOST'] = 'localhost'
-app.config['CACHE_REDIS_PORT'] = 6379
-app.config['CACHE_DEFAULT_TIMEOUT'] = 60 # Default cache expiry is 60 seconds
+if os.environ.get('FLASK_ENV') == 'production':
+    app.config['CACHE_TYPE'] = 'RedisCache'
+    app.config['CACHE_REDIS_HOST'] = 'localhost'
+    app.config['CACHE_REDIS_PORT'] = 6379
+else:
+    app.config['CACHE_TYPE'] = 'SimpleCache'
 
 # Configure Celery
 app.config['broker_url'] = 'redis://localhost:6379/0'
@@ -187,8 +189,24 @@ def register_company():
 @app.route('/api/verify_session', methods=['GET'])
 @jwt_required()
 def verify_session():
-    # If the token is expired or the user lookup loader fails (user deleted), 
+    # If the token is expired or the user lookup loader fails (user deleted),
     # this will automatically abort with a 401 before reaching this return statement.
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user:
+        return jsonify({"error": "Account no longer exists. Please log in again."}), 401
+
+    if user.role == 'company' and user.company_profile:
+        if user.company_profile.is_blacklisted:
+            return jsonify({"error": "Your company account has been suspended."}), 403
+        if not user.company_profile.is_approved:
+            return jsonify({"error": "Your company account is pending Admin approval."}), 403
+
+    if user.role == 'student' and user.student_profile:
+        if user.student_profile.is_blacklisted:
+            return jsonify({"error": "Your account has been suspended."}), 403
+
     return jsonify({"status": "valid"}), 200
 
 # ==========================================
@@ -201,6 +219,12 @@ def verify_session():
 @app.route('/api/admin/global_search', methods=['GET'])
 @jwt_required()
 def admin_global_search():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     query = request.args.get('q', '').strip()
     if not query or len(query) < 2: return jsonify({})
     search_term = f"%{query}%"
@@ -219,6 +243,12 @@ def admin_global_search():
 @app.route('/api/admin/stats', methods=['GET'])
 @jwt_required()
 def get_admin_stats():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     # Fetching counts for the dashboard
     return jsonify({
         "students": Student.query.count(),
@@ -230,6 +260,12 @@ def get_admin_stats():
 @app.route('/api/admin/companies', methods=['GET'])
 @jwt_required()
 def get_admin_companies():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     companies = Company.query.all()
     result = [{
         "id": c.id,
@@ -245,6 +281,12 @@ def get_admin_companies():
 @app.route('/api/admin/approve_company/<int:id>', methods=['PUT'])
 @jwt_required()
 def approve_company(id):
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     company = Company.query.get_or_404(id)
     company.is_approved = True
     db.session.commit()
@@ -253,6 +295,12 @@ def approve_company(id):
 @app.route('/api/admin/blacklist_company/<int:id>', methods=['PUT'])
 @jwt_required()
 def toggle_blacklist_company(id):
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     company = Company.query.get_or_404(id)
     company.is_blacklisted = not company.is_blacklisted
     db.session.commit()
@@ -262,6 +310,12 @@ def toggle_blacklist_company(id):
 @app.route('/api/admin/drives', methods=['GET'])
 @jwt_required()
 def get_all_drives():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     drives = PlacementDrive.query.all()
     result = [{
         "id": d.id,
@@ -270,13 +324,20 @@ def get_all_drives():
         "desc": d.job_description,               
         "eligibility": d.eligibility_criteria,
         "deadline": d.application_deadline,
-        "status": d.status
+        "status": d.status,
+        "created_at": d.created_at.strftime('%Y-%m-%d %H:%M:%S')
     } for d in drives]
     return jsonify(result), 200
 
 @app.route('/api/admin/approve_drive/<int:id>', methods=['PUT'])
 @jwt_required()
 def approve_drive(id):
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     drive = PlacementDrive.query.get_or_404(id)
     drive.status = 'Approved'
     db.session.commit()
@@ -285,6 +346,12 @@ def approve_drive(id):
 @app.route('/api/admin/reject_drive/<int:id>', methods=['PUT'])
 @jwt_required()
 def reject_drive(id):
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     drive = PlacementDrive.query.get_or_404(id)
     drive.status = 'Rejected'
     db.session.commit()
@@ -295,6 +362,12 @@ def reject_drive(id):
 @jwt_required()
 @cache.cached(timeout=60)
 def get_admin_students():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     students = Student.query.all()
     result = [{
         "id": s.id,
@@ -311,6 +384,12 @@ def get_admin_students():
 @app.route('/api/admin/blacklist_student/<int:id>', methods=['PUT'])
 @jwt_required()
 def toggle_student_blacklist(id):
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
     student = Student.query.get_or_404(id)
     student.is_blacklisted = not student.is_blacklisted
     db.session.commit()
@@ -322,19 +401,25 @@ def toggle_student_blacklist(id):
 @app.route('/api/admin/analytics', methods=['GET'])
 @jwt_required()
 def get_admin_analytics():
-    # 1. Application Funnel Data
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if not user or user.role != 'admin':
+        return jsonify({"error": "Unauthorized access. Admins only."}), 403
+
+    # --- 2. GATHER DATA ---
+    # Application Funnel Data
     funnel_query = db.session.query(Application.status, func.count(Application.id)).group_by(Application.status).all()
     funnel_dict = {status: count for status, count in funnel_query}
     
-    # 2. Selections by Branch
+    # Selections by Branch
     branch_query = db.session.query(Student.branch, func.count(Application.id))\
         .join(Application, Student.id == Application.student_id)\
         .filter(Application.status == 'Selected')\
         .group_by(Student.branch).all()
     branch_dict = {branch: count for branch, count in branch_query}
     
-    # 3. Drive Posting Trends (Mocked timeline for charting)
-    # In a production app, this would group by month/week.
+    # Drive Posting Trends
     drives_query = db.session.query(func.date(PlacementDrive.created_at), func.count(PlacementDrive.id))\
         .group_by(func.date(PlacementDrive.created_at)).all()
     trends_list = [{"date": d[0], "count": d[1]} for d in drives_query]
@@ -354,11 +439,16 @@ def get_admin_analytics():
 @app.route('/api/recruiter/global_search', methods=['GET'])
 @jwt_required()
 def recruiter_global_search():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'company':
+        return jsonify({"error": "Unauthorized"}), 403
+
     query = request.args.get('q', '').strip()
     if not query or len(query) < 2: return jsonify({})
     search_term = f"%{query}%"
-    
-    user = User.query.get(get_jwt_identity())
+
     company = user.company_profile
 
     drives = PlacementDrive.query.filter(PlacementDrive.company_id == company.id, PlacementDrive.job_title.ilike(search_term)).limit(5).all()
@@ -404,6 +494,11 @@ def handle_recruiter_drives():
         
     # --- POST: Create a new drive ---
     if request.method == 'POST':
+        if company.is_blacklisted:
+            return jsonify({"error": "Your company account has been suspended."}), 403
+        if not company.is_approved:
+            return jsonify({"error": "Your company account is pending Admin approval."}), 403
+
         data = request.get_json()
         try:
             new_drive = PlacementDrive(
@@ -426,8 +521,15 @@ def handle_recruiter_drives():
 def modify_recruiter_drive(id):
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
+
+    if not user or user.role != 'company':
+        return jsonify({"error": "Unauthorized"}), 403
+
     company = user.company_profile
-    
+
+    if company.is_blacklisted:
+        return jsonify({"error": "Your company account has been suspended."}), 403
+
     drive = PlacementDrive.query.get_or_404(id)
     
     # Security Check: Ensure this company owns this drive
@@ -473,23 +575,27 @@ def modify_recruiter_drive(id):
 def get_recruiter_applications():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
+
+    if not user or user.role != 'company':
+        return jsonify({"error": "Unauthorized"}), 403
+
     company = user.company_profile
 
     # Fetch all applications linked to drives owned by this company
     applications = db.session.query(Application).join(PlacementDrive).filter(PlacementDrive.company_id == company.id).all()
     
     result = [{
-        "id": app.id,
-        "student_name": app.student.full_name,
-        "branch": app.student.branch,
-        "cgpa": app.student.cgpa,
-        "drive_title": app.drive.job_title,
-        "resume_file": app.resume_file,
-        "applied_on": app.application_date.strftime('%Y-%m-%d'),
-        "status": app.status,
-        "remarks": app.remarks,
-        "interview_date": app.interview_date.isoformat() if app.interview_date else None
-    } for app in applications]
+        "id": application.id,
+        "student_name": application.student.full_name,
+        "branch": application.student.branch,
+        "cgpa": application.student.cgpa,
+        "drive_title": application.drive.job_title,
+        "resume_file": application.resume_file,
+        "applied_on": application.application_date.strftime('%Y-%m-%d'),
+        "status": application.status,
+        "remarks": application.remarks,
+        "interview_date": application.interview_date.isoformat() if application.interview_date else None
+    } for application in applications]
     
     # Sort by newest applications first
     result.sort(key=lambda x: x['id'], reverse=True)
@@ -500,7 +606,15 @@ def get_recruiter_applications():
 def update_application_status(id):
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
+
+    if not user or user.role != 'company':
+        return jsonify({"error": "Unauthorized"}), 403
+
     company = user.company_profile
+
+    if company.is_blacklisted:
+        return jsonify({"error": "Your company account has been suspended."}), 403
+
     app_record = Application.query.get_or_404(id)
     
     if app_record.drive.company_id != company.id:
@@ -536,11 +650,16 @@ def update_application_status(id):
 @app.route('/api/student/global_search', methods=['GET'])
 @jwt_required()
 def student_global_search():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     query = request.args.get('q', '').strip()
     if not query or len(query) < 2: return jsonify({})
     search_term = f"%{query}%"
     
-    user = User.query.get(get_jwt_identity())
     student = user.student_profile
 
     drives = PlacementDrive.query.join(Company).filter(
@@ -558,14 +677,16 @@ def student_global_search():
         "My Applications": [{"id": a.id, "title": a.drive.company.name, "subtitle": f"Status: {a.status}", "route": "/student-applications"} for a in apps]
     }), 200
 
-from datetime import datetime
-
 # --- STUDENT: PROFILE ---
 @app.route('/api/student/profile', methods=['GET', 'PUT'])
 @jwt_required()
 def student_profile():
-    user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
+    current_user_id = get_jwt_identity()
+    user = User.query.get_or_404(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     student = user.student_profile
 
     if request.method == 'GET':
@@ -599,6 +720,12 @@ def student_profile():
 @app.route('/api/student/upload_resume', methods=['POST'])
 @jwt_required()
 def upload_resume():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     if 'resume' not in request.files:
         return jsonify({"message": "No file part"}), 400
     
@@ -609,11 +736,10 @@ def upload_resume():
     # Keep it simple: only allow PDFs
     if file and file.filename.endswith('.pdf'):
         # Secure the filename and make it unique using the user's ID
-        filename = secure_filename(f"student_{get_jwt_identity()}_{file.filename}")
+        filename = secure_filename(f"student_{current_user_id}_{file.filename}")
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         
         # Save the filename in the database
-        user = User.query.get(get_jwt_identity())
         user.student_profile.resume_file = filename
         db.session.commit()
         
@@ -628,10 +754,14 @@ def serve_file(filename):
 
 @app.route('/api/student/drives', methods=['GET'])
 @jwt_required()
-@cache.cached(timeout=120)
+@cache.cached(timeout=120, key_prefix=lambda: f"student_drives_{get_jwt_identity()}")
 def get_student_drives():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     student = user.student_profile
     
     # Students should only see 'Approved' drives
@@ -672,7 +802,10 @@ def student_apply():
         return jsonify({"error": "Unauthorized"}), 403
         
     student = user.student_profile
-    
+
+    if student.is_blacklisted:
+        return jsonify({"error": "Your account has been suspended. Contact the Placement Cell."}), 403
+
     # 1. Ensure they actually have a resume before applying!
     if not student.resume_file:
         return jsonify({"error": "Please upload your resume in the Profile section before applying."}), 400
@@ -707,19 +840,23 @@ def student_apply():
 def get_student_applications():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     student = user.student_profile
     
     applications = Application.query.filter_by(student_id=student.id).all()
     
     result = [{
-        "id": app.id,
-        "company": app.drive.company.name,
-        "title": app.drive.job_title,
-        "date": app.application_date.strftime('%b %d, %Y'),
-        "status": app.status,
-        "remarks": app.remarks,
-        "interview_date": app.interview_date.strftime('%Y-%m-%d %H:%M') if app.interview_date else None
-    } for app in applications]
+        "id": application.id,
+        "company": application.drive.company.name,
+        "title": application.drive.job_title,
+        "date": application.application_date.strftime('%b %d, %Y'),
+        "status": application.status,
+        "remarks": application.remarks,
+        "interview_date": application.interview_date.strftime('%Y-%m-%d %H:%M') if application.interview_date else None
+    } for application in applications]
     
     result.sort(key=lambda x: x['id'], reverse=True)
     return jsonify(result), 200
@@ -849,13 +986,19 @@ def send_monthly_admin_report(self):
 @app.route('/api/student/export_applications', methods=['POST'])
 @jwt_required()
 def trigger_export():
-    user_id = get_jwt_identity()
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user or user.role != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+
     # Send task to the Celery queue asynchronously
-    task = export_csv_task.delay(user_id)
+    task = export_csv_task.delay(current_user_id)
     return jsonify({"task_id": task.id}), 202
 
 # --- ROUTE TO CHECK STATUS ---
 @app.route('/api/tasks/<task_id>', methods=['GET'])
+@jwt_required()
 def get_task_status(task_id):
     task = export_csv_task.AsyncResult(task_id)
     if task.state == 'PENDING':
@@ -868,7 +1011,7 @@ def get_task_status(task_id):
 # ==========================================
 # CELERY BEAT SCHEDULE
 # ==========================================
-# This tells Celery what to run and when to run it
+
 celery.conf.beat_schedule = {
     'send-daily-reminders': {
         'task': 'app.send_daily_reminders',

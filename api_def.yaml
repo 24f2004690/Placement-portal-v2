@@ -1,0 +1,1206 @@
+openapi: 3.0.3
+info:
+  title: CPMS API
+  description: >
+    Campus Placement Management System API. Provides authentication and
+    role-based endpoints for Admins, Companies (Recruiters), and Students
+    to manage placement drives, applications, and profiles.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+
+tags:
+  - name: Auth
+    description: Registration, login, and session verification
+  - name: Admin
+    description: Endpoints restricted to users with role 'admin'
+  - name: Recruiter
+    description: Endpoints restricted to users with role 'company'
+  - name: Student
+    description: Endpoints restricted to users with role 'student'
+  - name: Tasks
+    description: Async task status (Celery-backed)
+  - name: Files
+    description: File serving
+
+security:
+  - bearerAuth: []
+
+paths:
+  /:
+    get:
+      tags: [Auth]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: API is running
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "CPMS API is Running!"
+
+  # ==========================================
+  # AUTH
+  # ==========================================
+  /api/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email/username and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  description: Email or username
+                  example: jane@example.com
+                password:
+                  type: string
+                  format: password
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Company account not approved or blacklisted / student blacklisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/register/student:
+    post:
+      tags: [Auth]
+      summary: Register a new student account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, username, email, password]
+              properties:
+                name:
+                  type: string
+                username:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                phone:
+                  type: string
+                dob:
+                  type: string
+                  description: Date of birth (freeform string, e.g. YYYY-MM-DD)
+                branch:
+                  type: string
+                cgpa:
+                  type: number
+                  format: float
+      responses:
+        "201":
+          description: Student registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Missing required field, or email/username already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error during registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/register/company:
+    post:
+      tags: [Auth]
+      summary: Register a new company (recruiter) account
+      description: New company accounts default to unapproved (is_approved = false) and require Admin approval before login succeeds.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, username, email, password, hr_contact]
+              properties:
+                name:
+                  type: string
+                username:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                hr_contact:
+                  type: string
+                website:
+                  type: string
+      responses:
+        "201":
+          description: Company registered successfully, pending Admin approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Missing required field, or email/username already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error during registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/verify_session:
+    get:
+      tags: [Auth]
+      summary: Verify the current JWT session is still valid
+      description: >
+        Re-checks that the user still exists and, for companies/students,
+        that they have not been blacklisted or (for companies) unapproved
+        since the token was issued.
+      responses:
+        "200":
+          description: Session is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: valid
+        "401":
+          description: Token invalid/expired, or account no longer exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Account blacklisted or (company) pending approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ==========================================
+  # ADMIN
+  # ==========================================
+  /api/admin/global_search:
+    get:
+      tags: [Admin]
+      summary: Search across students, companies, and drives (admin only)
+      parameters:
+        - $ref: "#/components/parameters/SearchQuery"
+      responses:
+        "200":
+          description: Grouped search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GlobalSearchResult"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Get dashboard summary stats (admin only)
+      responses:
+        "200":
+          description: Aggregate counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  students:
+                    type: integer
+                  companies:
+                    type: integer
+                  pending_companies:
+                    type: integer
+                  active_drives:
+                    type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/admin/companies:
+    get:
+      tags: [Admin]
+      summary: List all registered companies (admin only)
+      responses:
+        "200":
+          description: List of companies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CompanyAdminView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/admin/approve_company/{id}:
+    put:
+      tags: [Admin]
+      summary: Approve a pending company (admin only)
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Company approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/blacklist_company/{id}:
+    put:
+      tags: [Admin]
+      summary: Toggle a company's blacklist status (admin only)
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Blacklist status toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/drives:
+    get:
+      tags: [Admin]
+      summary: List all placement drives across all companies (admin only)
+      responses:
+        "200":
+          description: List of drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriveAdminView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/admin/approve_drive/{id}:
+    put:
+      tags: [Admin]
+      summary: Approve a pending placement drive (admin only)
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Drive approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/reject_drive/{id}:
+    put:
+      tags: [Admin]
+      summary: Reject a pending placement drive (admin only)
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Drive rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/students:
+    get:
+      tags: [Admin]
+      summary: List all students (admin only)
+      description: Response is cached for 60 seconds (shared across admins; not user-specific).
+      responses:
+        "200":
+          description: List of students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StudentAdminView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/admin/blacklist_student/{id}:
+    put:
+      tags: [Admin]
+      summary: Toggle a student's blacklist status (admin only)
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Blacklist status toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/analytics:
+    get:
+      tags: [Admin]
+      summary: Get placement analytics (funnel, branch selections, drive trends)
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  funnel:
+                    type: object
+                    description: Application status -> count
+                    additionalProperties:
+                      type: integer
+                    example: { Applied: 40, Shortlisted: 12, Selected: 5, Rejected: 8 }
+                  branches:
+                    type: object
+                    description: Branch -> count of selected students
+                    additionalProperties:
+                      type: integer
+                    example: { CSE: 3, ECE: 2 }
+                  trends:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date
+                        count:
+                          type: integer
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ==========================================
+  # RECRUITER (COMPANY)
+  # ==========================================
+  /api/recruiter/global_search:
+    get:
+      tags: [Recruiter]
+      summary: Search within own drives and their applicants (company only)
+      parameters:
+        - $ref: "#/components/parameters/SearchQuery"
+      responses:
+        "200":
+          description: Grouped search results scoped to this company
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  My Drives:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchResultItem"
+                  Applicants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchResultItem"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/recruiter/drives:
+    get:
+      tags: [Recruiter]
+      summary: List drives posted by the logged-in company
+      responses:
+        "200":
+          description: List of the company's drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriveRecruiterView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Recruiter]
+      summary: Post a new placement drive
+      description: New drives always start with status 'Pending' and require Admin approval. Blacklisted or unapproved companies cannot post.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DriveInput"
+      responses:
+        "201":
+          description: Drive posted, pending Admin approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          description: Unauthorized, company blacklisted, or company not yet approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error creating drive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/recruiter/drives/{id}:
+    put:
+      tags: [Recruiter]
+      summary: Update a drive owned by the logged-in company
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DriveInput"
+      responses:
+        "200":
+          description: Drive updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          description: Unauthorized, company blacklisted, or drive not owned by this company
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          description: Server error updating drive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [Recruiter]
+      summary: Delete a drive owned by the logged-in company
+      description: Fails if the drive already has applications; close it instead.
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      responses:
+        "200":
+          description: Drive deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Drive has active applications and cannot be deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Unauthorized, company blacklisted, or drive not owned by this company
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/recruiter/applications:
+    get:
+      tags: [Recruiter]
+      summary: List all applications received across the company's drives
+      responses:
+        "200":
+          description: List of applications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApplicationRecruiterView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/recruiter/applications/{id}:
+    put:
+      tags: [Recruiter]
+      summary: Update an applicant's status, remarks, and/or interview schedule
+      parameters:
+        - $ref: "#/components/parameters/IdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [Applied, Shortlisted, "Interview Scheduled", Selected, Rejected]
+                remarks:
+                  type: string
+                interview_date:
+                  type: string
+                  format: date
+                  description: Required if status is 'Interview Scheduled'
+                  example: "2026-08-01"
+                interview_time:
+                  type: string
+                  description: 24-hour HH:MM, defaults to 00:00 if omitted
+                  example: "14:30"
+      responses:
+        "200":
+          description: Application updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          description: Unauthorized, company blacklisted, or application not linked to this company
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          description: Server error updating application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ==========================================
+  # STUDENT
+  # ==========================================
+  /api/student/global_search:
+    get:
+      tags: [Student]
+      summary: Search approved drives and own applications
+      parameters:
+        - $ref: "#/components/parameters/SearchQuery"
+      responses:
+        "200":
+          description: Grouped search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  Active Opportunities:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchResultItem"
+                  My Applications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchResultItem"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/student/profile:
+    get:
+      tags: [Student]
+      summary: Get the logged-in student's profile
+      responses:
+        "200":
+          description: Student profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentProfile"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      tags: [Student]
+      summary: Update the logged-in student's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                phone:
+                  type: string
+                branch:
+                  type: string
+                cgpa:
+                  type: number
+                  format: float
+                dob:
+                  type: string
+                experience:
+                  type: string
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/student/upload_resume:
+    post:
+      tags: [Student]
+      summary: Upload the student's resume (PDF only)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [resume]
+              properties:
+                resume:
+                  type: string
+                  format: binary
+                  description: PDF file
+      responses:
+        "200":
+          description: Resume uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  resume_file:
+                    type: string
+        "400":
+          description: No file provided, or file is not a PDF
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/student/drives:
+    get:
+      tags: [Student]
+      summary: List currently approved, open placement drives
+      description: >
+        Only 'Approved' drives with a future deadline are returned.
+        Each drive includes a has_applied flag for the logged-in student.
+        Response is cached per-user for 120 seconds.
+      responses:
+        "200":
+          description: List of open drives
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DriveStudentView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/student/apply:
+    post:
+      tags: [Student]
+      summary: Apply to a placement drive
+      description: Requires a resume already on file. Blocked for blacklisted students. Duplicate applications to the same drive are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drive_id]
+              properties:
+                drive_id:
+                  type: integer
+      responses:
+        "201":
+          description: Application submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Missing drive_id, no resume on file, or already applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Unauthorized or student blacklisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Server error submitting application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/student/applications:
+    get:
+      tags: [Student]
+      summary: List the logged-in student's applications
+      responses:
+        "200":
+          description: List of applications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApplicationStudentView"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/student/export_applications:
+    post:
+      tags: [Student]
+      summary: Trigger an async CSV export of the student's applications
+      description: Queues a Celery task and returns a task_id to poll via /api/tasks/{task_id}. Requires Redis/Celery to be running.
+      responses:
+        "202":
+          description: Export task queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id:
+                    type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ==========================================
+  # TASKS
+  # ==========================================
+  /api/tasks/{task_id}:
+    get:
+      tags: [Tasks]
+      summary: Poll the status/result of an async Celery task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+                    enum: [PENDING, STARTED, SUCCESS, FAILURE]
+                  status:
+                    type: string
+                    description: Present when state is PENDING or FAILURE
+                  result:
+                    type: object
+                    description: Present when state is SUCCESS (or other non-failure state)
+
+  # ==========================================
+  # FILES
+  # ==========================================
+  /uploads/{filename}:
+    get:
+      tags: [Files]
+      summary: Download an uploaded file (e.g. a resume)
+      security: []
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File contents
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT returned from /api/login, sent as "Authorization Bearer <token>"
+
+  parameters:
+    IdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+      description: Numeric database ID of the resource
+
+    SearchQuery:
+      name: q
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 2
+      description: Search term. Queries shorter than 2 characters return an empty result set.
+
+  responses:
+    Forbidden:
+      description: Not authenticated, or authenticated user lacks the required role
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      example:
+        error: "Unauthorized"
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Login successful
+        token:
+          type: string
+          description: JWT access token, valid for 24 hours
+        role:
+          type: string
+          enum: [admin, company, student]
+        username:
+          type: string
+        name:
+          type: string
+          description: Display name (admin's fixed label, company name, or student full name)
+        id:
+          type: integer
+          description: User ID
+        company_id:
+          type: integer
+          nullable: true
+        student_id:
+          type: integer
+          nullable: true
+
+    SearchResultItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        subtitle:
+          type: string
+        route:
+          type: string
+          description: Suggested frontend route for this result
+
+    GlobalSearchResult:
+      type: object
+      properties:
+        Students:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResultItem"
+        Companies:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResultItem"
+        Placement Drives:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResultItem"
+
+    CompanyAdminView:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        hr_contact:
+          type: string
+        website:
+          type: string
+          nullable: true
+        is_approved:
+          type: boolean
+        is_blacklisted:
+          type: boolean
+
+    StudentAdminView:
+      type: object
+      properties:
+        id:
+          type: integer
+        full_name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        branch:
+          type: string
+          nullable: true
+        cgpa:
+          type: number
+          format: float
+          nullable: true
+        is_blacklisted:
+          type: boolean
+
+    StudentProfile:
+      type: object
+      properties:
+        full_name:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        dob:
+          type: string
+          nullable: true
+        branch:
+          type: string
+          nullable: true
+        cgpa:
+          type: number
+          format: float
+          nullable: true
+        experience:
+          type: string
+          nullable: true
+        resume_file:
+          type: string
+          nullable: true
+
+    DriveInput:
+      type: object
+      required: [title, desc, deadline]
+      properties:
+        title:
+          type: string
+        desc:
+          type: string
+        eligibility:
+          type: string
+        deadline:
+          type: string
+          description: Date string, e.g. YYYY-MM-DD
+          example: "2026-08-15"
+
+    DriveAdminView:
+      type: object
+      properties:
+        id:
+          type: integer
+        company:
+          type: string
+        job_title:
+          type: string
+        desc:
+          type: string
+        eligibility:
+          type: string
+          nullable: true
+        deadline:
+          type: string
+        status:
+          type: string
+          enum: [Pending, Approved, Rejected, Closed]
+
+    DriveRecruiterView:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        desc:
+          type: string
+        eligibility:
+          type: string
+          nullable: true
+        deadline:
+          type: string
+        status:
+          type: string
+          enum: [Pending, Approved, Rejected, Closed]
+
+    DriveStudentView:
+      type: object
+      properties:
+        id:
+          type: integer
+        company:
+          type: string
+        title:
+          type: string
+        desc:
+          type: string
+        eligibility:
+          type: string
+          nullable: true
+        deadline:
+          type: string
+        has_applied:
+          type: boolean
+
+    ApplicationRecruiterView:
+      type: object
+      properties:
+        id:
+          type: integer
+        student_name:
+          type: string
+        branch:
+          type: string
+          nullable: true
+        cgpa:
+          type: number
+          format: float
+          nullable: true
+        drive_title:
+          type: string
+        resume_file:
+          type: string
+          nullable: true
+        applied_on:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [Applied, Shortlisted, "Interview Scheduled", Selected, Rejected]
+        remarks:
+          type: string
+          nullable: true
+        interview_date:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApplicationStudentView:
+      type: object
+      properties:
+        id:
+          type: integer
+        company:
+          type: string
+        title:
+          type: string
+        date:
+          type: string
+          description: "Formatted application date, e.g. 'Jan 05, 2026'"
+        status:
+          type: string
+          enum: [Applied, Shortlisted, "Interview Scheduled", Selected, Rejected]
+        remarks:
+          type: string
+          nullable: true
+        interview_date:
+          type: string
+          nullable: true
+          description: "Formatted as YYYY-MM-DD HH:MM, null if not scheduled"

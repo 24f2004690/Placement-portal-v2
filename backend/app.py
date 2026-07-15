@@ -127,9 +127,19 @@ def login():
 @app.route('/api/register/student', methods=['POST'])
 def register_student():
     data = request.get_json()
-    required_fields = ['name', 'username', 'email', 'password']
+    required_fields = ['name', 'username', 'email', 'password', 'dob']
     for field in required_fields:
         if not data.get(field): return jsonify({"error": f"{field} is required"}), 400
+
+    if data.get('dob'):
+        try:
+            dob = datetime.strptime(data['dob'], '%Y-%m-%d')
+        except ValueError:
+            return jsonify({"error": "Date of birth must be a valid date"}), 400
+
+        age_years = (datetime.utcnow() - dob).days / 365.25
+        if dob > datetime.utcnow() or age_years < 15 or age_years > 100:
+            return jsonify({"error": "Please enter a valid date of birth"}), 400
 
     if User.query.filter((User.email == data['email']) | (User.username == data['username'])).first():
         return jsonify({"error": "Email or Username already exists"}), 400

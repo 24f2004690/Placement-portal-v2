@@ -101,12 +101,13 @@ const deleteDrive = async (id) => {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
     })
-    
+
+    const data = await response.json
     if (response.ok) {
       alert("Drive deleted.")
       fetchMyDrives()
     } else {
-      alert("Failed to delete.")
+      alert(data.error || "Failed to delete.")
     }
   } catch (error) {
     alert(error.message)

@@ -52,9 +52,9 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = 'tiblue1729@gmail.com'
-app.config['MAIL_PASSWORD'] = 'mdmcaqsbmxmpqbby'
-app.config['MAIL_DEFAULT_SENDER'] = 'tiblue1729@gmail.com'
+app.config['MAIL_USERNAME'] = 'yourmail@domain.com'
+app.config['MAIL_PASSWORD'] = '*******************'
+app.config['MAIL_DEFAULT_SENDER'] = 'yourmail@domain.com'
 
 mail = Mail(app)
 
